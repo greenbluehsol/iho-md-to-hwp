@@ -1,0 +1,8 @@
+*.hwp
+*.hwpx
+*.pdf
+__pycache__/
+*.pyc
+test_*.hwp
+test_*.hwpx
+PRO 2.1.hwp
