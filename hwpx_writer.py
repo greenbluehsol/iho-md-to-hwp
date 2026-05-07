@@ -263,24 +263,36 @@ def _build_agenda_block(template_block, item: AgendaItem):
                         _set_text(sp, item.session_sub)
 
     # ── 콘텐츠 단락 템플릿 찾기 ─────────────────────────────────
-    # paraPrIDRef="25" → ○ 소제목, paraPrIDRef="26" → - 글머리
+    # 테이블 단락 여부 확인 헬퍼
+    def _has_table(p):
+        return any(r.find(_tag('tbl')) is not None for r in p.findall(_tag('run')))
+
+    # 우선순위: 실제 content 스타일(pr=12 → 소제목, pr=13 → 글머리)
+    # 그 다음: pr=25/26 (구 스타일)
+    SUBHEADING_PRS = ('12', '25')
+    BULLET_PRS = ('13', '26')
+
     template_subheading = None
     template_bullet = None
     for p in block:
+        if _has_table(p):
+            continue   # 테이블 단락은 절대 content 템플릿으로 사용 안 함
         pr = p.get('paraPrIDRef', '')
         txt = _get_text(p).strip()
-        if not txt or '□' in txt:
+        if '□' in txt:
             continue
-        if pr == '25' and template_subheading is None:
+        if pr in SUBHEADING_PRS and template_subheading is None:
             template_subheading = p
-        elif pr == '26' and template_bullet is None:
+        elif pr in BULLET_PRS and template_bullet is None:
             template_bullet = p
         if template_subheading and template_bullet:
             break
 
-    # fallback: 둘 다 같은 것 사용
+    # fallback: 테이블 없는 첫 번째 비빈 content 단락
     if template_subheading is None and template_bullet is None:
         for p in block:
+            if _has_table(p):
+                continue
             txt = _get_text(p).strip()
             if txt and '□' not in txt and len(txt) > 5:
                 template_subheading = p
@@ -353,9 +365,9 @@ def _generate_hwpx(items: list[AgendaItem], output_hwpx: Path, template_path: Pa
         print('[오류] 템플릿에서 의제 항목을 찾을 수 없습니다.')
         return
 
-    # 문서 설정(secPr)이 담긴 첫 단락만 유지, 나머지 소개 페이지 제거
-    # secPr은 항상 children[0]에 위치
-    header_children = children[:1]
+    # 첫 의제 블록 전까지만 유지 (secPr 등 문서 설정 보존, 소개 페이지 제거)
+    # starts[0]==0이면 agenda가 맨 앞 → header 없음
+    header_children = children[:starts[0]]
 
     # 첫 번째 의제를 템플릿으로 사용
     template_end = starts[1] if len(starts) > 1 else len(children)

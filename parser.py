@@ -37,12 +37,18 @@ def _split_title_line(line: str) -> tuple[str, str, str, str]:
     'HSSC18-05.1A S-100 실무그룹(S-100WG) 보고서 Report of the S-100 Working Group (Submitted by: Julia Powell)'
     -> (agenda_number, title_ko, title_en, presenter)
     """
-    # Extract presenter - "(Submitted by: ...)" 또는 "(Chair: ...)" 형태
+    # Extract presenter - "(Submitted by: ...)" / "(Chair: ...)" / "(제출자 – ...)" 형태
     presenter = ""
     submitted_match = re.search(r'\((Submitted by|Chair)[:\s]+([^)]+)\)', line, re.IGNORECASE)
     if submitted_match:
         presenter = submitted_match.group(2).strip()
         line = line[:submitted_match.start()].strip()
+    else:
+        # 한국어 제출자 패턴: "(제출자 – ...)" 또는 "(제출자 - ...)" 또는 "(제출자: ...)"
+        jechul_match = re.search(r'\(제출자\s*[–\-:]\s*([^)]+)\)', line)
+        if jechul_match:
+            presenter = jechul_match.group(1).strip()
+            line = line[:jechul_match.start()].strip()
 
     # Extract agenda number (first token, alphanumeric with dashes and dots)
     parts = line.split(None, 1)
@@ -137,14 +143,14 @@ def parse_md_file(file_path: Path) -> Optional[AgendaItem]:
     # 헤더 영역 파싱 (첫 섹션 전까지)
     header_lines = [l.strip() for l in lines[:first_section_idx] if l.strip()]
 
-    # --- 구분선 있는 HSSC 형식인지 확인
-    has_separator = any(l == '---' for l in header_lines)
+    # --- 구분선 있는 HSSC 형식인지 확인 (3개 이상 '-'로만 구성된 줄)
+    has_separator = any(re.match(r'^-{3,}$', l) for l in header_lines)
 
     if has_separator:
         # HSSC 형식: session / sub / --- / [**해원...**] / 제목행(들)
-        sep_pos = next(i for i, l in enumerate(header_lines) if l == '---')
+        sep_pos = next(i for i, l in enumerate(header_lines) if re.match(r'^-{3,}$', l))
         pre_sep = header_lines[:sep_pos]
-        post_sep = [l for l in header_lines[sep_pos+1:] if not l.startswith('**해원')]
+        post_sep = [l for l in header_lines[sep_pos+1:] if not l.startswith('**해원') and not l.startswith('**')]
 
         if len(pre_sep) >= 1:
             session_line = pre_sep[0]
@@ -159,9 +165,13 @@ def parse_md_file(file_path: Path) -> Optional[AgendaItem]:
                 # 다음 줄들에서 제목/발표자 읽기
                 agenda_number = parsed_num
                 for line in post_sep[1:]:
-                    if line.startswith('(Submitted by') or line.startswith('(submitted by'):
-                        m = re.search(r'\(Submitted by[:\s]+(.+?)\)?\s*$', line, re.IGNORECASE)
-                        presenter = m.group(1).strip() if m else line.strip('() ')
+                    if '제출자' in line or 'submitted by' in line.lower():
+                        # (제출자 – ...) 또는 (Submitted by: ...) 형태
+                        _, _, _, parsed_pr2 = _split_title_line(line)
+                        if parsed_pr2:
+                            presenter = parsed_pr2
+                        else:
+                            presenter = re.sub(r'^\(제출자\s*[–\-:]\s*', '', line).strip('() ')
                     elif not title_ko:
                         en_ratio = sum(1 for c in line if c.isascii() and c.isalpha()) / max(len(line), 1)
                         if en_ratio < 0.5:
@@ -181,19 +191,25 @@ def parse_md_file(file_path: Path) -> Optional[AgendaItem]:
 
         non_empty = header_lines
         for line in non_empty:
-            # 영문 제목 (대문자 시작, 영문 비율 높음)
-            en_ratio = sum(1 for c in line if c.isascii() and c.isalpha()) / max(len(line), 1)
-            # 발표자 줄 (제출자 또는 Submitted by)
-            if '제출자' in line or 'Submitted by' in line.lower():
-                # "(제출자 - XXX)" 또는 "(Submitted by: XXX)" 형태
-                m = re.search(r'[제출자Submitted by:\s-]+(.+?)\)?$', line, re.IGNORECASE)
-                if m:
-                    presenter = m.group(1).strip().rstrip(')')
-                else:
-                    presenter = line.strip('() ')
-            elif not title_ko and en_ratio < 0.5:
+            # 파일명과 동일한 줄(의제번호만 있는 줄)은 건너뜀
+            if line.strip() == agenda_number:
+                continue
+
+            has_korean = any('가' <= c <= '힣' for c in line)
+            has_english = any(c.isascii() and c.isalpha() for c in line)
+
+            # 제출자 포함 줄 또는 한영 혼합 줄 → _split_title_line으로 분리
+            if '제출자' in line or 'Submitted by' in line.lower() or (has_korean and has_english):
+                _, parsed_ko, parsed_en, parsed_pr = _split_title_line(line)
+                if parsed_ko and not title_ko:
+                    title_ko = parsed_ko
+                if parsed_en and not title_en:
+                    title_en = parsed_en
+                if parsed_pr and not presenter:
+                    presenter = parsed_pr
+            elif has_korean and not title_ko:
                 title_ko = line
-            elif not title_en and en_ratio >= 0.5:
+            elif has_english and not title_en:
                 title_en = line
 
     # 섹션 파싱
