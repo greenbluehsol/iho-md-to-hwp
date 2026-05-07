@@ -306,10 +306,9 @@ def _build_agenda_block(template_block, item: AgendaItem):
             if sec_name.replace(' ', '') in key.replace(' ', '') or key.replace(' ', '') in sec_name.replace(' ', ''):
                 matched_key = key
                 break
-        if matched_key is None:
-            continue
 
-        blocks_data = item.sections[matched_key]
+        # 섹션 없으면 빈 내용으로 교체 (템플릿 원본 텍스트 제거)
+        blocks_data = item.sections[matched_key] if matched_key else []
         marker = section_label_map.get(sec_name, sec_name)
         block = _replace_section_content(block, marker, blocks_data,
                                           template_subheading, template_bullet)
